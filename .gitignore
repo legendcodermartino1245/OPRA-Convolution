@@ -20,6 +20,9 @@ venv/
 output/
 
 # Generated FIR/export artifacts
+fir_profiles/
+fir_profiles_tier3/
+opra_profile_directory_map.json
 fir_pack/
 wav_pack/
 responses/

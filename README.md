@@ -235,11 +235,13 @@ python -m fir_dsp.cli \
 python -m fir_dsp.opra_cli show "Audio Dest Ti"
 python -m fir_dsp.opra_cli eq-pack http://opra.roonlabs.net/database_v1.jsonl WH-1000XM5 --target oratory1990_harman_target
 python -m fir_dsp.opra_cli eq-pack http://opra.roonlabs.net/database_v1.jsonl WH-1000XM5 --target oratory1990_harman_target --target-sample-rate 48000
+python -m fir_dsp.opra_cli eq-pack-all https://opra.roonlabs.net/database_v1.jsonl --output fir_profiles --all-profiles --fail-on-skip
+python -m fir_dsp.opra_cli eq-pack-all https://opra.roonlabs.net/database_v1.jsonl --output fir_profiles --all-profiles --fail-on-skip --shard-count 16 --shard-index 0
 python -m fir_dsp.opra_cli tier3-pack http://opra.roonlabs.net/database_v1.jsonl WH-1000XM5 --target oratory1990_harman_target --source-rate 44100 --design-rate 48000 --chain-response roon_44100_to_48000_response.txt --resampler-name roon_measured
 python -m fir_dsp.opra_cli profile-map "C:\path\to\database_v1_2.jsonl" --output opra_profile_directory_map.json --root fir_profiles --mkdirs
 ```
 
-`opra_cli eq-pack` and `opra_cli eq-pack-all` are locked to the strict OPRA release path: `default` profile only, fixed FFT size `131072`, headroom `9.6` dB, true peak enabled, oversample factor `8`, design oversample `1`, default PCM rates, fixed artifact layout, and no windowing. `eq-pack` only accepts the OPRA database source, product query, required `--target`, and optional `--target-sample-rate`; release DSP settings cannot be overridden from this CLI.
+`opra_cli eq-pack` and `opra_cli eq-pack-all` are locked to the strict OPRA release path: `default` profile only, fixed FFT size `131072`, headroom `9.6` dB, true peak enabled, oversample factor `8`, design oversample `1`, default PCM rates, fixed artifact layout, and no windowing. `eq-pack` only accepts the OPRA database source, product query, required `--target`, and optional `--target-sample-rate`; release DSP settings cannot be overridden from this CLI. `eq-pack-all` exports the auto-selected/default profile per product by default; add `--all-profiles` to export every valid OPRA EQ profile from the profile map, including manual-only target variants. Add `--fail-on-skip` in CI or release jobs when any skipped profile should fail the run. `--shard-count` and `--shard-index` split large OPRA exports into deterministic chunks for parallel CI artifact uploads.
 
 `--target-sample-rate 48000` pins OPRA EQ evaluation to a fixed 48 kHz playback curve before the pack is discretized for each exported PCM rate. Use it for fixed-rate playback chains where upstream audio is resampled before the FIR is applied.
 
@@ -405,6 +407,15 @@ python -m pytest
 ```
 
 The test suite covers deterministic output, headroom enforcement, interpolation and validation rules, CLI JSON export behavior, phase modes, and analyzer behavior.
+
+## GitHub Actions
+
+The repository includes two workflows:
+
+- `CI` runs the pytest suite on Python 3.11, 3.12, and 3.13, then builds the wheel and source archive.
+- `OPRA Preset Artifacts` is a manual workflow that reads the OPRA JSONL URL, writes `opra_profile_directory_map.json`, optionally builds strict OPRA packs through `python -m fir_dsp.opra_cli eq-pack-all`, shards large pack builds, and uploads each generated `fir_profiles` shard as GitHub Actions artifacts.
+
+Use `pack_mode=all-profiles` in the OPRA workflow when you want every valid preset from `https://opra.roonlabs.net/database_v1.jsonl`. Use `map-only` when you only need the validated directory manifest. Increase `shard_count` for the full OPRA feed if a single shard gets close to the Actions time or artifact-size limits.
 
 ## Licensing
 

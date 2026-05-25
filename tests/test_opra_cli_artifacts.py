@@ -269,6 +269,185 @@ def test_profile_directory_map_marks_manual_only_variants(tmp_path):
         assert profile["default_selected"] is False
 
 
+def test_eq_pack_all_all_profiles_uses_profile_map_paths(tmp_path, monkeypatch):
+    products = {
+        "vendor::product": {
+            "id": "vendor::product",
+            "data": {"subtype": "in_ear", "vendor_id": "vendor", "name": "Product"},
+        }
+    }
+    vendors = {"vendor": {"id": "vendor", "data": {"name": "Vendor"}}}
+    eqs_by_product = {
+        "vendor::product": [
+            {
+                "id": "vendor:product::autoeq_crinacle_blue",
+                "data": {
+                    "type": "parametric_eq",
+                    "product_id": "vendor::product",
+                    "details": "Measured by Crinacle Rig",
+                    "parameters": {
+                        "gain_db": 0.0,
+                        "bands": [
+                            {"type": "peak_dip", "frequency": 1000.0, "gain_db": 3.0, "q": 0.7},
+                        ],
+                    },
+                },
+            },
+            {
+                "id": "vendor:product::autoeq_crinacle",
+                "data": {
+                    "type": "parametric_eq",
+                    "product_id": "vendor::product",
+                    "details": "Measured by Crinacle Rig",
+                    "parameters": {
+                        "gain_db": 0.0,
+                        "bands": [
+                            {"type": "peak_dip", "frequency": 1000.0, "gain_db": 3.0, "q": 0.7},
+                        ],
+                    },
+                },
+            },
+        ]
+    }
+    root_dir = tmp_path / "profiles"
+    calls = []
+
+    monkeypatch.setattr(
+        "fir_dsp.opra_cli.load_opra_jsonl",
+        lambda _db: (products, eqs_by_product, vendors),
+    )
+
+    def fake_write_release_pack(pack_root, **kwargs):
+        calls.append(
+            {
+                "pack_root": Path(pack_root).relative_to(root_dir).as_posix(),
+                "product_id": kwargs["product"]["id"],
+                "eq_id": kwargs["eq"]["id"],
+                "rates": kwargs["rates"],
+                "fft_size": kwargs["fft_size"],
+                "headroom_db": kwargs["headroom_db"],
+                "profile": kwargs["profile"],
+                "window_type": kwargs["window_type"],
+                "window_preset": kwargs["window_preset"],
+                "target_sample_rate": kwargs["target_sample_rate"],
+                "keep_existing_artifacts": kwargs["keep_existing_artifacts"],
+            }
+        )
+
+    monkeypatch.setattr(opra_cli, "_write_release_pack", fake_write_release_pack)
+
+    rc = main(
+        [
+            "eq-pack-all",
+            "db.jsonl",
+            "--output",
+            str(root_dir),
+            "--all-profiles",
+            "--fail-on-skip",
+            "--target-sample-rate",
+            "48000",
+        ]
+    )
+
+    assert rc == 0
+    assert calls == [
+        {
+            "pack_root": "vendor/product/autoeq_crinacle",
+            "product_id": "vendor::product",
+            "eq_id": "vendor:product::autoeq_crinacle",
+            "rates": opra_cli.DEFAULT_RATES,
+            "fft_size": opra_cli.STRICT_OPRA_FFT_SIZE,
+            "headroom_db": opra_cli.STRICT_OPRA_HEADROOM_DB,
+            "profile": opra_cli.DEFAULT_PROFILE_NAME,
+            "window_type": opra_cli.DEFAULT_WINDOW_TYPE,
+            "window_preset": opra_cli.DEFAULT_WINDOW_PRESET,
+            "target_sample_rate": 48000,
+            "keep_existing_artifacts": False,
+        },
+        {
+            "pack_root": "vendor/product/autoeq_crinacle_blue",
+            "product_id": "vendor::product",
+            "eq_id": "vendor:product::autoeq_crinacle_blue",
+            "rates": opra_cli.DEFAULT_RATES,
+            "fft_size": opra_cli.STRICT_OPRA_FFT_SIZE,
+            "headroom_db": opra_cli.STRICT_OPRA_HEADROOM_DB,
+            "profile": opra_cli.DEFAULT_PROFILE_NAME,
+            "window_type": opra_cli.DEFAULT_WINDOW_TYPE,
+            "window_preset": opra_cli.DEFAULT_WINDOW_PRESET,
+            "target_sample_rate": 48000,
+            "keep_existing_artifacts": False,
+        },
+    ]
+
+    calls.clear()
+    rc = main(
+        [
+            "eq-pack-all",
+            "db.jsonl",
+            "--output",
+            str(root_dir),
+            "--all-profiles",
+            "--shard-count",
+            "2",
+            "--shard-index",
+            "1",
+        ]
+    )
+
+    assert rc == 0
+    assert [call["eq_id"] for call in calls] == ["vendor:product::autoeq_crinacle_blue"]
+
+
+def test_eq_pack_all_fail_on_skip_raises_for_all_profiles(tmp_path, monkeypatch):
+    products = {
+        "vendor::product": {
+            "id": "vendor::product",
+            "data": {"subtype": "in_ear", "vendor_id": "vendor", "name": "Product"},
+        }
+    }
+    vendors = {"vendor": {"id": "vendor", "data": {"name": "Vendor"}}}
+    eqs_by_product = {
+        "vendor::product": [
+            {
+                "id": "vendor:product::autoeq_crinacle",
+                "data": {
+                    "type": "parametric_eq",
+                    "product_id": "vendor::product",
+                    "details": "Measured by Crinacle Rig",
+                    "parameters": {
+                        "gain_db": 0.0,
+                        "bands": [
+                            {"type": "peak_dip", "frequency": 1000.0, "gain_db": 3.0, "q": 0.7},
+                        ],
+                    },
+                },
+            },
+        ]
+    }
+
+    monkeypatch.setattr(
+        "fir_dsp.opra_cli.load_opra_jsonl",
+        lambda _db: (products, eqs_by_product, vendors),
+    )
+    monkeypatch.setattr(
+        opra_cli,
+        "_write_release_pack",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("release gate failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="skipped 1 profile"):
+        main(
+            [
+                "eq-pack-all",
+                "db.jsonl",
+                "--output",
+                str(tmp_path / "profiles"),
+                "--all-profiles",
+                "--fail-on-skip",
+            ]
+        )
+
+
 def test_eq_pack_uses_mapped_directory_and_creates_zips(tmp_path, monkeypatch):
     db_path = tmp_path / "db.jsonl"
     db_path.write_text("", encoding="utf-8")

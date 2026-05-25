@@ -211,6 +211,37 @@ def _build_profile_directory_map(
     }
 
 
+def _iter_profile_map_pack_jobs(
+    products: dict[str, dict[str, Any]],
+    eqs_by_product: dict[str, list[dict[str, Any]]],
+    vendors: dict[str, dict[str, Any]],
+    *,
+    root_dir: Path,
+) -> Iterable[tuple[str, dict[str, Any], dict[str, Any], Path]]:
+    profile_map = _build_profile_directory_map(
+        products,
+        eqs_by_product,
+        vendors,
+        root_dir=root_dir,
+    )
+    eq_by_id = {
+        eq["id"]: eq
+        for eqs in eqs_by_product.values()
+        for eq in eqs
+    }
+
+    profiles = profile_map["profiles"].values()
+    for profile in sorted(profiles, key=lambda item: item["directory_relpath"]):
+        product_id = str(profile["product_id"])
+        eq_id = str(profile["eq_id"])
+        yield (
+            product_id,
+            products[product_id],
+            eq_by_id[eq_id],
+            Path(root_dir) / Path(str(profile["directory_relpath"])),
+        )
+
+
 def _build_default_pack_root(root_dir: Path, eq_id: str, *, product_id: str | None = None) -> Path:
     try:
         vendor_dir, product_dir, target_dir = _profile_directory_parts(eq_id)
@@ -232,6 +263,14 @@ def _resolve_multi_pack_root(base_root: Path, eq_id: str, *, product_id: str | N
 
 def _arg_or_default(args: argparse.Namespace, name: str, default: Any) -> Any:
     return getattr(args, name, default)
+
+
+def _resolve_pack_shard_args(args: argparse.Namespace) -> tuple[int, int]:
+    shard_count = ensure_positive_int("shard_count", _arg_or_default(args, "shard_count", 1))
+    shard_index = _ensure_non_negative_int("shard_index", _arg_or_default(args, "shard_index", 0))
+    if shard_index >= shard_count:
+        raise ValueError("shard_index must be less than shard_count")
+    return shard_count, shard_index
 
 
 def _resolve_pack_window_args(args: argparse.Namespace) -> tuple[str | None, str | None]:
@@ -1587,15 +1626,70 @@ def cmd_eq_pack_all(args: argparse.Namespace) -> int:
     products, eqs_by_product, vendors = load_opra_jsonl(args.db)
     output_root = _arg_or_default(args, "output", None)
     base_root = Path(output_root) if output_root is not None else Path(DEFAULT_PROFILE_ROOT)
+    all_profiles = bool(_arg_or_default(args, "all_profiles", False))
+    fail_on_skip = bool(_arg_or_default(args, "fail_on_skip", False))
+    shard_count, shard_index = _resolve_pack_shard_args(args)
+    skipped: list[str] = []
+    processed = 0
 
+    if all_profiles:
+        jobs = _iter_profile_map_pack_jobs(
+            products,
+            eqs_by_product,
+            vendors,
+            root_dir=base_root,
+        )
+        for job_number, (product_id, product, eq, pack_root) in enumerate(jobs):
+            if job_number % shard_count != shard_index:
+                continue
+            print(f"[PROCESS] {eq['id']} -> {pack_root}")
+            try:
+                _write_release_pack(
+                    pack_root,
+                    product=product,
+                    eq=eq,
+                    vendors=vendors,
+                    db_source=str(args.db),
+                    rates=DEFAULT_RATES,
+                    fft_size=STRICT_OPRA_FFT_SIZE,
+                    headroom_db=STRICT_OPRA_HEADROOM_DB,
+                    profile=DEFAULT_PROFILE_NAME,
+                    oversample_factor=STRICT_OPRA_OVERSAMPLE_FACTOR,
+                    design_oversample=STRICT_OPRA_DESIGN_OVERSAMPLE,
+                    window_type=DEFAULT_WINDOW_TYPE,
+                    window_preset=DEFAULT_WINDOW_PRESET,
+                    target_sample_rate=args.target_sample_rate,
+                    benchmark_warmup=STRICT_OPRA_BENCHMARK_WARMUP,
+                    benchmark_repeat=STRICT_OPRA_BENCHMARK_REPEAT,
+                    fir_dirname=DEFAULT_FIR_DIRNAME,
+                    wav_dirname=DEFAULT_WAV_DIRNAME,
+                    keep_existing_artifacts=False,
+                )
+                processed += 1
+            except Exception as exc:
+                skipped.append(str(eq["id"]))
+                print(f"[SKIP] {eq['id']} (FIR generation failed: {exc})")
+
+        if fail_on_skip and skipped:
+            raise RuntimeError(f"OPRA pack-all skipped {len(skipped)} profile(s); first skipped: {skipped[0]}")
+        if fail_on_skip and processed == 0:
+            raise RuntimeError("OPRA pack-all generated no packs")
+        return 0
+
+    job_number = 0
     for product_id, product in products.items():
         eqs = eqs_by_product.get(product_id, [])
         if not eqs:
+            continue
+        current_job_number = job_number
+        job_number += 1
+        if current_job_number % shard_count != shard_index:
             continue
 
         try:
             eq = select_eq(product, eqs_by_product, vendors)
         except ValueError as exc:
+            skipped.append(product_id)
             print(f"[SKIP] {product_id} ({exc})")
             continue
 
@@ -1623,10 +1717,16 @@ def cmd_eq_pack_all(args: argparse.Namespace) -> int:
                 wav_dirname=DEFAULT_WAV_DIRNAME,
                 keep_existing_artifacts=False,
             )
+            processed += 1
         except Exception as exc:
+            skipped.append(product_id)
             print(f"[SKIP] {product_id} (FIR generation failed: {exc})")
             continue
 
+    if fail_on_skip and skipped:
+        raise RuntimeError(f"OPRA pack-all skipped {len(skipped)} product(s); first skipped: {skipped[0]}")
+    if fail_on_skip and processed == 0:
+        raise RuntimeError("OPRA pack-all generated no packs")
     return 0
 
 
@@ -1714,7 +1814,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_pack.set_defaults(func=cmd_eq_pack)
 
-    parser_all = subparsers.add_parser("eq-pack-all", help="Build FIR WAV packs for every unambiguous product in the database")
+    parser_all = subparsers.add_parser("eq-pack-all", help="Build FIR WAV packs from the OPRA database")
     parser_all.add_argument("db", nargs="?", default=DEFAULT_OPRA_DB_URL)
     parser_all.add_argument(
         "--target-sample-rate",
@@ -1727,6 +1827,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Root directory for generated product packs; defaults to fir_profiles",
+    )
+    parser_all.add_argument(
+        "--all-profiles",
+        action="store_true",
+        help="Build every valid OPRA EQ profile instead of only the auto-selected/default profile per product",
+    )
+    parser_all.add_argument(
+        "--fail-on-skip",
+        action="store_true",
+        help="Return a failing exit if any selected OPRA product/profile cannot be exported",
+    )
+    parser_all.add_argument(
+        "--shard-count",
+        type=int,
+        default=1,
+        help="Split pack generation into this many deterministic shards",
+    )
+    parser_all.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Generate only this zero-based shard index",
     )
     parser_all.set_defaults(func=cmd_eq_pack_all)
 
