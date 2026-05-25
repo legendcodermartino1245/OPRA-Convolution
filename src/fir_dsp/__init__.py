@@ -1,0 +1,62 @@
+from .api import generate_fir_multi_rate, generate_fir_pipeline, is_power_of_two
+from .core import (
+    WINDOW_PRESETS,
+    build_fft_freq_grid,
+    coeff_hash_sha256,
+    compute_frequency_response,
+    compute_true_peak,
+    dataclass_to_json_ready,
+    db_to_linear,
+    design_fir_from_mag_fft,
+    interpolate_db_response,
+    interpolate_magnitude_response,
+    linear_to_db,
+    normalize_fir,
+    oversample_signal,
+    request_fingerprint,
+    resolve_window,
+    summarize_latency,
+    summarize_response_error,
+    summarize_verification,
+)
+from .models import PipelineResult, PipelineSpec
+from .profiles import (
+    DEFAULT_PROFILE,
+    PipelineProfile,
+    resolve_profile,
+)
+from .target_validation import TargetValidationSummary, validate_fir_against_target
+from .types import DbMagnitude, LinearMagnitude
+
+__all__ = [
+    "generate_fir_pipeline",
+    "generate_fir_multi_rate",
+    "is_power_of_two",
+    "WINDOW_PRESETS",
+    "build_fft_freq_grid",
+    "db_to_linear",
+    "linear_to_db",
+    "interpolate_magnitude_response",
+    "interpolate_db_response",
+    "design_fir_from_mag_fft",
+    "resolve_window",
+    "oversample_signal",
+    "compute_true_peak",
+    "normalize_fir",
+    "compute_frequency_response",
+    "summarize_response_error",
+    "summarize_latency",
+    "summarize_verification",
+    "coeff_hash_sha256",
+    "request_fingerprint",
+    "dataclass_to_json_ready",
+    "TargetValidationSummary",
+    "validate_fir_against_target",
+    "PipelineResult",
+    "PipelineSpec",
+    "PipelineProfile",
+    "DEFAULT_PROFILE",
+    "resolve_profile",
+    "LinearMagnitude",
+    "DbMagnitude",
+]

@@ -1,0 +1,42 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.pytest-tmp/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tmp/
+dist/
+build/
+*.egg-info/
+.venv/
+.verify-venv/
+venv/
+.env
+output/
+
+# Generated FIR/export artifacts
+fir_pack/
+wav_pack/
+responses/
+*.zip
+*_results/
+*_pack/
+*_analysis.json
+*_benchmark.json
+*_ATTRIBUTION_OPRA.json
+*_NOTICE_OPRA.txt
+*_selected_eq.txt
+
+# Local/private EQ database experiments
+*_local.jsonl
+mart_lcd2c_local.jsonl
+
+# Ad-hoc source response/PEQ scratch files belong in examples/ if published.
+Audeze_LCD-2_Classic_oratory_param.txt
+Sony_WH1000XM5_oratory_param.txt
+autoeq_audeze.txt

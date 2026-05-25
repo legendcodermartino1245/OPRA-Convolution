@@ -1,0 +1,96 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fir-dsp"
+version = "1.1.0"
+description = "Deterministic minimum-phase FIR filter design toolchain"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE_OPRA.md", "ARTIFACTS_LICENSE.md"]
+authors = [
+  { name = "Mart System" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+plot = [
+  "matplotlib>=3.8",
+]
+dev = [
+  "build>=1.2",
+  "matplotlib>=3.8",
+  "mypy>=1.8",
+  "pytest>=8.0",
+  "setuptools>=77.0.3",
+]
+
+[project.scripts]
+fir-dsp = "fir_dsp.cli:main"
+fir-dsp-analyze = "fir_dsp.analyze:main"
+fir-dsp-benchmark-analyze = "fir_dsp.benchmark_analyze:main"
+fir-dsp-txt2wav = "fir_dsp.txt_to_wav:main"
+fir-dsp-opra = "fir_dsp.opra_cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q -p no:cacheprovider"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_unused_ignores = false
+warn_redundant_casts = false
+warn_return_any = false
+show_error_codes = true
+mypy_path = "src"
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["matplotlib.*", "scipy.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+  "fir_dsp.api",
+  "fir_dsp.artifact_metrics",
+  "fir_dsp.cli",
+  "fir_dsp.core",
+  "fir_dsp.opra_cli",
+]
+# TODO(type-safety): temporary per-module debt for dynamic dataclass/NumPy/CLI result typing.
+# Track this as technical debt; this config is a passing baseline, not strict type safety.
+disable_error_code = [
+  "arg-type",
+  "attr-defined",
+  "call-overload",
+  "type-var",
+  "union-attr",
+]
+
+[[tool.mypy.overrides]]
+module = ["fir_dsp.analyze"]
+disable_error_code = ["var-annotated"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fir_dsp = ["py.typed"]
