@@ -1,0 +1,189 @@
+name: OPRA Preset Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      db:
+        description: OPRA JSONL URL or checked-out file path
+        required: true
+        default: https://opra.roonlabs.net/database_v1.jsonl
+      pack_mode:
+        description: Which OPRA presets to export
+        required: true
+        default: all-profiles
+        type: choice
+        options:
+          - all-profiles
+          - auto-selected
+          - map-only
+      target_sample_rate:
+        description: Optional fixed OPRA EQ evaluation rate, for example 48000
+        required: false
+        default: ""
+      shard_count:
+        description: Number of parallel shards for pack generation
+        required: true
+        default: "16"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "4"
+          - "8"
+          - "16"
+          - "32"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare OPRA shard matrix
+    runs-on: ubuntu-latest
+    outputs:
+      shard_matrix: ${{ steps.matrix.outputs.shard_matrix }}
+    env:
+      SHARD_COUNT: ${{ inputs.shard_count }}
+
+    steps:
+      - name: Build shard matrix
+        id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          count = int(os.environ["SHARD_COUNT"])
+          print("shard_matrix=" + json.dumps({"shard": list(range(count))}))
+          PY
+
+  opra-map:
+    name: Write OPRA profile map
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPRA_DB: ${{ inputs.db }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install FIR DSP
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Write OPRA profile map
+        run: |
+          python -m fir_dsp.opra_cli profile-map "$OPRA_DB" \
+            --output opra_profile_directory_map.json \
+            --root fir_profiles \
+            --mkdirs
+
+      - name: Summarize OPRA profile map
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          profile_map = json.loads(Path("opra_profile_directory_map.json").read_text(encoding="utf-8"))
+          print(f"OPRA profiles: {profile_map['profile_count']}")
+          print(f"Auto-selected profiles: {profile_map['auto_selected_count']}")
+          print(f"Manual-only profiles: {profile_map['manual_only_count']}")
+          PY
+          du -sh opra_profile_directory_map.json fir_profiles
+
+      - name: Upload OPRA profile map
+        uses: actions/upload-artifact@v4
+        with:
+          name: opra-profile-directory-map
+          path: opra_profile_directory_map.json
+          if-no-files-found: error
+
+  opra-packs:
+    name: Generate OPRA preset shard ${{ matrix.shard }}
+    needs:
+      - prepare
+      - opra-map
+    if: ${{ inputs.pack_mode != 'map-only' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.shard_matrix) }}
+    env:
+      OPRA_DB: ${{ inputs.db }}
+      PACK_MODE: ${{ inputs.pack_mode }}
+      TARGET_SAMPLE_RATE: ${{ inputs.target_sample_rate }}
+      SHARD_COUNT: ${{ inputs.shard_count }}
+      SHARD_INDEX: ${{ matrix.shard }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install FIR DSP
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Build strict OPRA preset packs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          args=(
+            eq-pack-all "$OPRA_DB"
+            --output fir_profiles
+            --fail-on-skip
+            --shard-count "$SHARD_COUNT"
+            --shard-index "$SHARD_INDEX"
+          )
+          if [[ "$PACK_MODE" == "all-profiles" ]]; then
+            args+=(--all-profiles)
+          fi
+          if [[ -n "$TARGET_SAMPLE_RATE" ]]; then
+            args+=(--target-sample-rate "$TARGET_SAMPLE_RATE")
+          fi
+
+          python -m fir_dsp.opra_cli "${args[@]}"
+
+      - name: Summarize generated shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path("fir_profiles")
+          manifests = sorted(root.rglob("build_manifest.json")) if root.exists() else []
+          wav_zips = sorted(root.rglob("wav_pack.zip")) if root.exists() else []
+          proof_zips = sorted(root.rglob("proof_files.zip")) if root.exists() else []
+          print(f"Build manifests: {len(manifests)}")
+          print(f"WAV pack ZIPs: {len(wav_zips)}")
+          print(f"Proof ZIPs: {len(proof_zips)}")
+          PY
+          du -sh fir_profiles
+
+      - name: Upload OPRA generated preset shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: opra-generated-presets-${{ inputs.pack_mode }}-shard-${{ matrix.shard }}-of-${{ inputs.shard_count }}
+          path: fir_profiles
+          if-no-files-found: error
+          retention-days: 90
